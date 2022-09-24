@@ -85,6 +85,17 @@ elif [ "$command" = "delete-user" ]; then
 
 	echo "user $user deleted successfully"
 
+elif [ "$command" = "change-user-pass" ]; then
+
+	# get user name
+	user=$2
+	raise_error_if_user_empty "$user"
+	raise_error_if_user_not_exist "$user"
+	raise_error_if_user_is_out_of_group "$user"
+
+	# change the user password
+	passwd "$user"
+
 elif [ "$command" = "show-users" ]; then
 	
 	# get the group users
@@ -97,6 +108,7 @@ else
 	echo "commands:"
 	echo "  add-user [name]"
 	echo "  delete-user [name]"
+	echo "  change-user-pass [name]"
 	echo "  show-users"
 
 fi
