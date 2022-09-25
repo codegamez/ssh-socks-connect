@@ -14,9 +14,9 @@ fi
 
 # select appropriate command
 if [ -n "$outter_server_name" ] && [ -n "$inner_server_name" ]; then
-	ssh_command="ssh -fnNT -D $socks_port -J $outter_server_name $inner_server_name"
+	ssh_command="ssh -fnNT -o ServerAliveInterval=300 -o ServerAliveCountMax=2 -D $socks_port -J $outter_server_name $inner_server_name"
 else
-	ssh_command="ssh -fnNT -D $socks_port -J $outter_server_user@$outter_server_ip $inner_server_user@$inner_server_ip"
+	ssh_command="ssh -fnNT -o ServerAliveInterval=300 -o ServerAliveCountMax=2 -D $socks_port -J $outter_server_user@$outter_server_ip $inner_server_user@$inner_server_ip"
 fi
 
 # disconnect
