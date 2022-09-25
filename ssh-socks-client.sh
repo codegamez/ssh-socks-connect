@@ -1,7 +1,8 @@
-#!/bin/bash -e
+#!/bin/bash
 
 # script root directory
-dir="$(dirname -- "$(which -- "$0" 2>/dev/null || realpath -- "./$0")")"
+script=$(realpath "$0")
+dir=$(dirname "$script")
 
 if [ ! -f "$dir/client.conf" ]; then
 	echo "config file is not exist"
@@ -12,46 +13,171 @@ fi
 # config
 . "$dir/client.conf"
 
-# select appropriate command
-if [ -n "$outter_server_name" ] && [ -n "$inner_server_name" ]; then
-	ssh_command="ssh -fnNT -o ServerAliveInterval=300 -o ServerAliveCountMax=2 -D $socks_port -J $outter_server_name $inner_server_name"
+bg_monitor_task_name="sshsocksclientmonitor"
+
+# check socks port
+if [[ $socks_port ]] && [ $socks_port -eq $socks_port 2>/dev/null ]; then
+    if (($socks_port <= 1000 || $socks_port > 65535)); then
+	    echo "socks_port must be a decimal number between [1000-65535]"
+		exit
+  	fi
 else
-	ssh_command="ssh -fnNT -o ServerAliveInterval=300 -o ServerAliveCountMax=2 -D $socks_port -J $outter_server_user@$outter_server_ip $inner_server_user@$inner_server_ip"
+    echo "socks_port must be a decimal number between [1000-65535]"
+	exit
 fi
+
+# install sshpass
+if ! command -v sshpass &> /dev/null; then
+	apt install sshpass
+fi
+
+# proxy server address
+if [ -n "$proxy_server_name" ]; then
+	proxy_server="$proxy_server_name"
+elif [ -n "$proxy_server_ip" ] && [ -n "$proxy_server_user" ]; then
+	proxy_server="$proxy_server_user@$proxy_server_ip"
+else
+	proxy_server=""
+fi
+
+# target server address
+if [ -n "$target_server_name" ]; then
+	target_server="$target_server_name"
+elif [ -n "$target_server_ip" ] && [ -n "$target_server_user" ]; then
+	target_server="$target_server_user@$target_server_ip"
+else
+	target_server=""
+fi
+
+target_password_replacement="*****"
+
+# create socks proxy command
+if [ -n "$proxy_server" ]; then
+	ssh_command="
+		env SSHPASS=\"$proxy_server_pass\"
+		sshpass -d \"$target_password_replacement\" ssh -fnNT
+		-o LogLevel=quiet
+		-o ServerAliveInterval=300
+		-o ServerAliveCountMax=300
+		-o ProxyCommand=\"sshpass -e ssh -fnNT -W %h:%p $proxy_server\"
+		-D $socks_port
+		$target_server
+		$target_password_replacement<<<\"$target_server_pass\"
+	"
+	ssh_command=$(echo $ssh_command)
+else
+	ssh_command="
+		sshpass -d \"$password_replacement\" ssh -fnNT
+		-o LogLevel=quiet
+		-o ServerAliveInterval=300
+		-o ServerAliveCountMax=300
+		-D $socks_port
+		$target_server
+		$password_replacement<<<\"$target_server_pass\"
+	"
+fi
+
+is_port_busy() {
+	port_is_busy=$(lsof -i -P -n | grep $socks_port | head -1)
+	if [ -n "$port_is_busy" ]; then
+		true
+	else
+		false
+	fi
+}
+
+is_port_socks() {
+	port_is_socks=$(timeout 2 curl --socks5 127.0.0.1:$socks_port 8.8.8.8 2>&1 | grep "Unable to receive initial SOCKS5 response")
+	if [ -z "$port_is_socks" ]; then
+		true
+	else
+		false
+	fi
+}
 
 # disconnect
 if [ "$1" = "d" ] || [ "$1" = "c" ]; then
-	id=$(ps x | grep -F "$ssh_command" | head -n-1 | head -1 | awk '{print $1}')
-	if [ -n "$id" ]; then
-		kill "$id"
-		echo "socks server is stopped"
+
+	pkill -f "$script service" &> /dev/null
+
+	if is_port_busy; then
+		if is_port_socks; then
+			echo "stopping..."
+			kill $(lsof -t -i:$socks_port)
+			echo "socks server is stopped"
+		else
+			echo "port $socks_port is being used by another program"
+			exit
+		fi		
 	fi
+
 fi
 
 # connect
 if [ "$1" = "c" ]; then
-	echo $ssh_command
-	$($ssh_command)
+
+	echo "starting..."
+	eval $ssh_command
+	nohup bash -c "exec $script service &" &> /dev/null
 	echo "socks server is running on port $socks_port"
+
 	exit
 fi
 
 # status
 if [ "$1" = "s" ]; then
-	row=$(ps x | grep -F "$ssh_command" | head -n-1 | head -1)
-	if [ -n "$row" ]; then
-		echo "$row"
-		echo "socks server is running on port $socks_port"
+	
+	echo "checking..."
+
+	if is_port_busy; then
+		if is_port_socks; then
+			echo "socks server is running on port $socks_port"
+		else
+			echo "port $socks_port is being used by another program"
+		fi		
 	else
 		echo "server is not running"
 	fi
+
 	exit
 fi
 
+# service task
+if [ "$1" = "service" ]; then
+
+	while :; do
+		
+		sleep 5
+
+		# check every n seconds for server status
+		if is_port_busy; then
+			if is_port_socks; then
+				echo "[$(date)] socks server is running on port $socks_port"
+				sleep 8
+				continue
+			else
+				echo "[$(date)] port $socks_port is being used by another program"
+				sleep 30
+				continue
+			fi
+		fi
+
+		# if server is down, run it again
+		echo "[$(date)] starting..."
+		eval $ssh_command
+		echo "[$(date)] socks server is running on port $socks_port"
+
+	done
+
+fi
+
 # help
-if [ "$1" != "c" ] && [ "$1" != "d" ] && [ "$1" != "s" ]; then
+if [ "$1" != "c" ] &&
+	[ "$1" != "d" ] && 
+	[ "$1" != "s" ] && 
+	[ "$1" != "service" ]; then
 	echo "commands:"
-	echo "  c		> connect"
-	echo "  d		> disconnect"
-	echo "  s		> check status"
+	echo "  c			> connect"
+	echo "  d			> disconnect"
+	echo "  s			> check status"
 fi
