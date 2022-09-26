@@ -64,7 +64,6 @@ if [ -n "$proxy_server" ]; then
 		$target_server
 		$target_password_replacement<<<\"$target_server_pass\"
 	"
-	ssh_command=$(echo $ssh_command)
 else
 	ssh_command="
 		sshpass -d \"$password_replacement\" ssh -fnNT
@@ -76,6 +75,7 @@ else
 		$password_replacement<<<\"$target_server_pass\"
 	"
 fi
+ssh_command=$(echo $ssh_command)
 
 is_port_busy() {
 	port_is_busy=$(lsof -i -P -n | grep $socks_port | head -1)
