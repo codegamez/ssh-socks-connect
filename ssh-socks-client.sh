@@ -13,21 +13,19 @@ fi
 # config
 . "$dir/client.conf"
 
-bg_monitor_task_name="sshsocksclientmonitor"
-
 # check socks port
-if [[ $socks_port ]] && [ $socks_port -eq $socks_port 2>/dev/null ]; then
-    if (($socks_port <= 1000 || $socks_port > 65535)); then
-	    echo "socks_port must be a decimal number between [1000-65535]"
+if [[ $socks_port ]] && [ $socks_port -eq $socks_port ] 2>/dev/null; then
+	if (($socks_port <= 1000 || $socks_port > 65535)); then
+		echo "socks_port must be a decimal number between [1000-65535]"
 		exit
-  	fi
+	fi
 else
-    echo "socks_port must be a decimal number between [1000-65535]"
+	echo "socks_port must be a decimal number between [1000-65535]"
 	exit
 fi
 
 # install sshpass
-if ! command -v sshpass &> /dev/null; then
+if ! command -v sshpass &>/dev/null; then
 	apt install sshpass
 fi
 
@@ -98,18 +96,27 @@ is_port_socks() {
 # disconnect
 if [ "$1" = "d" ] || [ "$1" = "c" ]; then
 
-	pkill -f "$script service" &> /dev/null
+	echo "stopping..."
+
+	is_service_active=$(ps -x | grep "$script service" | head -n-1 | head -n1)
+	if [ -n "$is_service_active" ]; then
+		echo "client service is stopped"
+	fi
+
+	pkill -f "$script service" &>/dev/null
+	rm $dir/service.out &>/dev/null
 
 	if is_port_busy; then
 		if is_port_socks; then
-			echo "stopping..."
 			kill $(lsof -t -i:$socks_port)
 			echo "socks server is stopped"
 		else
 			echo "port $socks_port is being used by another program"
 			exit
-		fi		
+		fi
 	fi
+
+	pkill -f "$script" &>/dev/null
 
 fi
 
@@ -117,26 +124,45 @@ fi
 if [ "$1" = "c" ]; then
 
 	echo "starting..."
+
+	# create socks proxy
 	eval $ssh_command
-	nohup bash -c "exec $script service &" &> /dev/null
-	echo "socks server is running on port $socks_port"
+	
+	# run client service
+	nohup $script service &>$dir/service.out &
+	echo "client service is running in background"
+	
+	# check status
+	sleep 1
+	if is_port_busy; then
+		echo "socks server is running on port $socks_port"
+	else
+		echo "failed to start"
+	fi
 
 	exit
 fi
 
 # status
 if [ "$1" = "s" ]; then
-	
+
 	echo "checking..."
+
+	is_service_active=$(ps -x | grep "$script service" | head -n-1 | head -n1)
+	if [ -n "$is_service_active" ]; then
+		echo "client service is running in background"
+	else
+		echo "client service is not running"
+	fi
 
 	if is_port_busy; then
 		if is_port_socks; then
 			echo "socks server is running on port $socks_port"
 		else
 			echo "port $socks_port is being used by another program"
-		fi		
+		fi
 	else
-		echo "server is not running"
+		echo "socks server is not running"
 	fi
 
 	exit
@@ -146,7 +172,7 @@ fi
 if [ "$1" = "service" ]; then
 
 	while :; do
-		
+
 		sleep 5
 
 		# check every n seconds for server status
@@ -165,7 +191,12 @@ if [ "$1" = "service" ]; then
 		# if server is down, run it again
 		echo "[$(date)] starting..."
 		eval $ssh_command
-		echo "[$(date)] socks server is running on port $socks_port"
+		sleep 1
+		if is_port_busy; then
+			echo "[$(date)] socks server is running on port $socks_port"
+		else
+			echo "[$(date)] failed to start"
+		fi
 
 	done
 
@@ -173,8 +204,8 @@ fi
 
 # help
 if [ "$1" != "c" ] &&
-	[ "$1" != "d" ] && 
-	[ "$1" != "s" ] && 
+	[ "$1" != "d" ] &&
+	[ "$1" != "s" ] &&
 	[ "$1" != "service" ]; then
 	echo "commands:"
 	echo "  c			> connect"
